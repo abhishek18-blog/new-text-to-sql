@@ -49,13 +49,17 @@ async function handleLocalAI(question: string, role: string, schemaStr: string) 
 STRICT RULES — FOLLOW EXACTLY:
 1. Output ONLY the raw SQL query. No explanation, no markdown, no code fences, no comments.
 2. ONLY use table names and column names that are listed in the Schema below. NEVER invent column names.
-3. Date columns in this database store ISO 8601 strings like '2015-06-01T04:45:00.000Z'. To filter by date, use: departure LIKE '2015-06-01%'
+3. Date columns in this database store ISO 8601 strings like '2015-06-01T04:45:00.000Z'. To filter by date, use: column_name LIKE '2015-06-01%'
 4. Do NOT use DATE(), from, log_date, or any column not in the Schema.
 5. Do NOT add a semicolon before LIMIT. The correct format is: SELECT ... WHERE ... LIMIT 100
 6. Do NOT alias columns unless necessary.
-7. If the question is a greeting or unrelated to the database, output exactly: NOT_A_QUERY
-8. ${privacyRule}
-9. ALWAYS use IN instead of = when comparing against a subquery. Example: WHERE flight_id IN (SELECT ...) NOT WHERE flight_id = (SELECT ...)
+7. If the question is ONLY a greeting (e.g. 'hi', 'hello', 'thanks') with no database intent, output exactly: NOT_A_QUERY
+8. If the user asks to "show tables", "list tables", "what tables exist", or similar — generate SQL: SHOW TABLES
+9. If the user asks to "show entries", "show data", "show rows" for a table — generate: SELECT * FROM <table_name> LIMIT 100
+10. Only use DESCRIBE: for purely abstract questions like 'what is this database?' or 'describe the database' where no data listing is requested. Format: DESCRIBE: <2-3 sentence description>
+11. ${privacyRule}
+12. ALWAYS use IN instead of = when comparing against a subquery. Example: WHERE id IN (SELECT ...) NOT WHERE id = (SELECT ...)
+13. NEVER use LIMIT inside an IN() subquery — MySQL does not support it. Instead, use a JOIN with a derived table. Example: JOIN (SELECT film_id FROM rental GROUP BY film_id ORDER BY COUNT(*) DESC LIMIT 1) AS top ON film.film_id = top.film_id
 
 Schema:
 ${schemaStr}
@@ -67,14 +71,16 @@ SQL:`;
   const rawSql = (sqlResponse.content as string).trim();
 
   // Handle non-query responses
-  if (rawSql === "NOT_A_QUERY" || rawSql.toLowerCase().includes("you need to be an admin")) {
-    return {
-      sql_query: null,
-      results: null,
-      answer: rawSql === "NOT_A_QUERY"
-        ? "Hello! I'm your SQL assistant. Ask me anything about your database."
-        : "You need to be an admin to access this data.",
-    };
+  if (rawSql.toLowerCase().includes("you need to be an admin")) {
+    return { sql_query: null, results: null, answer: "You need to be an admin to access this data." };
+  }
+  if (rawSql === "NOT_A_QUERY") {
+    return { sql_query: null, results: null, answer: "Hello! I'm your SQL assistant. Ask me anything about your database." };
+  }
+  // Meta/descriptive question — model answers inline with DESCRIBE: prefix (1 LLM call, no second call needed)
+  if (rawSql.startsWith("DESCRIBE:")) {
+    const description = rawSql.replace(/^DESCRIBE:\s*/i, "").trim();
+    return { sql_query: null, results: null, answer: description };
   }
 
   // Step 2: Sanitize SQL — fix common LLM mistakes
@@ -183,14 +189,15 @@ async function handleOnlineAI(question: string, role: string, schemaStr: string)
       new SystemMessage(`You are a strict MySQL database assistant.
 
 CRITICAL INSTRUCTIONS:
-1. You MUST use the 'get_from_db' tool to fetch the exact data BEFORE answering any user question.
+1. You MUST use the 'get_from_db' tool to fetch the exact data BEFORE answering data questions.
 2. NEVER guess, estimate, or hallucinate numbers or data.
 3. Only use standard MySQL syntax. ALWAYS add LIMIT 100 to your queries unless a specific limit is requested.
 4. If user asks for any data that is not in the database, return "No data found".
 5. NEVER append warning messages. Just give the direct answer.
 6. Once you have fetched data using the 'get_from_db' tool, synthesize a clear, concise answer. Do NOT output the raw SQL query in your final answer.
-7. If the user's input is a greeting or unrelated to the schema, output exactly: NOT_A_QUERY
-8. If the column contains ISO 8601 strings (e.g., '2015-06-01T...'), you MUST wrap the column name in STR_TO_DATE(column_name, '%Y-%m-%dT%H:%i:%s.%fZ') before applying date functions like MONTH(), YEAR(), or DAY().
+7. If the user's input is a greeting or unrelated to the schema, respond conversationally WITHOUT using the tool.
+8. If the user asks a descriptive/meta question about the database (e.g. 'what is this database?', 'describe the database', 'what tables are there?'), answer directly from the Schema below WITHOUT using the get_from_db tool. Give a short, friendly plain English description — do NOT query INFORMATION_SCHEMA.
+9. If the column contains ISO 8601 strings (e.g., '2015-06-01T...'), you MUST wrap the column name in STR_TO_DATE(column_name, '%Y-%m-%dT%H:%i:%s.%fZ') before applying date functions like MONTH(), YEAR(), or DAY().
 
 PRIVACY & ACCESS CONTROL:
 The current active user role is: ${role.toUpperCase()}
