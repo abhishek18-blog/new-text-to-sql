@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { ConverterPanel } from './ConverterPanel';
 import { useNavigate } from 'react-router';
@@ -28,6 +28,7 @@ export function MainApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [queryUsedForOutput, setQueryUsedForOutput] = useState('');
   const [queryResult, setQueryResult] = useState<any[] | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [aiResponse, setAiResponse] = useState<string>('');
   const [serverLogs, setServerLogs] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>('User');
@@ -61,6 +62,8 @@ export function MainApp() {
     setCurrentQuery(query);
 
     const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
     const timeoutId = setTimeout(() => {
       // 5 seconds buffer: if online AI is selected and no internet is detected, abort
       if (provider === 'online' && !navigator.onLine) {
@@ -91,8 +94,21 @@ export function MainApp() {
       }
 
       setQueryUsedForOutput(query);
-      
-      const parsedResults = data.results ? (typeof data.results === 'string' ? [{ result: data.results }] : data.results) : null;
+
+      // RBAC guard: if the AI denied access, never show any table data
+      const ACCESS_DENIED_PHRASES = [
+        'you need to be an admin',
+        'admin to access this data',
+      ];
+      const isAccessDenied = ACCESS_DENIED_PHRASES.some(phrase =>
+        (data.answer || '').toLowerCase().includes(phrase)
+      );
+
+      const parsedResults = isAccessDenied
+        ? null
+        : data.results
+          ? (typeof data.results === 'string' ? [{ result: data.results }] : data.results)
+          : null;
       
       setCurrentSql(data.sql_query || '');
       setQueryResult(parsedResults);
@@ -119,16 +135,20 @@ export function MainApp() {
       console.error('Conversion failed:', error);
       
       const errorMsg = error.message?.toLowerCase() || '';
-      const isNetworkError = error.name === 'AbortError' ||
+      const isCancelled = error.name === 'AbortError' || errorMsg.includes('cancel') || errorMsg.includes('abort');
+      const isNetworkError = !isCancelled && (
                              errorMsg === 'offline' ||
                              errorMsg.includes('failed to fetch') || 
                              errorMsg.includes('fetch failed') || 
                              errorMsg.includes('enotfound') || 
                              errorMsg.includes('econnrefused') || 
-                             errorMsg.includes('network connection');
+                             errorMsg.includes('network connection'));
 
-      // navigator.onLine is also a good check for browser internet connection
-      if (provider === 'online' && (isNetworkError || !navigator.onLine)) {
+      if (isCancelled) {
+        setCurrentSql('');
+        setAiResponse('');
+        toast.info("User cancelled the request");
+      } else if (provider === 'online' && (isNetworkError || !navigator.onLine)) {
         setCurrentSql('-- Error: Network connection failed.');
         setAiResponse("Network issue detected. Please check your internet connection and try again.");
         toast.error("Network error. Try again");
@@ -199,6 +219,11 @@ export function MainApp() {
         
         <ConverterPanel
           onConvert={handleConvert}
+          onCancel={() => {
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+          }}
           currentQuery={currentQuery}
           currentSql={currentSql}
           isLoading={isLoading}

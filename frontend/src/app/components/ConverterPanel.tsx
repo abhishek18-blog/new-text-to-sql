@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 interface ConverterPanelProps {
   onConvert: (query: string, provider: 'local' | 'online', database: string) => void;
+  onCancel?: () => void;
   currentQuery: string;
   currentSql: string;
   isLoading: boolean;
@@ -15,7 +16,7 @@ interface ConverterPanelProps {
   serverLogs?: string[];
 }
 
-export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading, queryUsedForOutput, queryResult, aiResponse, userRole, serverLogs = [] }: ConverterPanelProps) {
+export function ConverterPanel({ onConvert, onCancel, currentQuery, currentSql, isLoading, queryUsedForOutput, queryResult, aiResponse, userRole, serverLogs = [] }: ConverterPanelProps) {
   const [query, setQuery] = useState(currentQuery);
   const [provider, setProvider] = useState<'local' | 'online'>('online');
   const [database, setDatabase] = useState<'sakila' | 'airportdb'>('sakila');
@@ -233,23 +234,25 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
               {/* Action Buttons */}
               <div className="flex items-center gap-3">
                 <span className="text-xs text-zinc-500 hidden sm:inline-block">Press <kbd className="font-sans px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-300 text-[10px]">⌘</kbd> + <kbd className="font-sans px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-300 text-[10px]">Enter</kbd></span>
-                <button
-                  type="submit"
-                  disabled={isLoading || !query.trim()}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white rounded-xl disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed transition-all font-semibold text-sm shadow-lg shadow-indigo-500/25"
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4" />
-                      Generate SQL
-                    </>
-                  )}
-                </button>
+                {isLoading ? (
+                  <button
+                    type="button"
+                    onClick={() => onCancel && onCancel()}
+                    className="flex items-center gap-2 px-6 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/50 rounded-xl transition-all font-semibold text-sm"
+                  >
+                    <div className="w-4 h-4 border-2 border-rose-400/30 border-t-rose-400 rounded-full animate-spin" />
+                    Cancel Generation
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!query.trim()}
+                    className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white rounded-xl disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 disabled:cursor-not-allowed transition-all font-semibold text-sm shadow-lg shadow-indigo-500/25"
+                  >
+                    <Play className="w-4 h-4" />
+                    Generate SQL
+                  </button>
+                )}
               </div>
             </div>
           </form>
@@ -288,8 +291,8 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
                 </p>
               </div>
 
-              {/* Mock Database Results */}
-              {queryResult && (
+              {/* Data Results Table — hidden if access was denied */}
+              {queryResult && !(['you need to be an admin', 'admin to access this data'].some(p => (aiResponse || '').toLowerCase().includes(p))) && (
                 <div className="border-t border-zinc-800/60 bg-zinc-950 flex flex-col flex-1">
                   <div className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800/60 bg-zinc-900/30">
                     <TableIcon className="w-4 h-4 text-emerald-400" />
