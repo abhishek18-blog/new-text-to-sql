@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 
 interface ConverterPanelProps {
-  onConvert: (query: string, provider: 'local' | 'online') => void;
+  onConvert: (query: string, provider: 'local' | 'online', database: string) => void;
   currentQuery: string;
   currentSql: string;
   isLoading: boolean;
@@ -12,21 +12,28 @@ interface ConverterPanelProps {
   queryResult?: any[] | null;
   aiResponse?: string;
   userRole: string;
+  serverLogs?: string[];
 }
 
-export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading, queryUsedForOutput, queryResult, aiResponse, userRole }: ConverterPanelProps) {
+export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading, queryUsedForOutput, queryResult, aiResponse, userRole, serverLogs = [] }: ConverterPanelProps) {
   const [query, setQuery] = useState(currentQuery);
   const [provider, setProvider] = useState<'local' | 'online'>('online');
+  const [database, setDatabase] = useState<'sakila' | 'airportdb'>('sakila');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [databaseMenuOpen, setDatabaseMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isCheckingLocal, setIsCheckingLocal] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const dbMenuRef = useRef<HTMLDivElement>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setProviderMenuOpen(false);
+      }
+      if (dbMenuRef.current && !dbMenuRef.current.contains(event.target as Node)) {
+        setDatabaseMenuOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -36,7 +43,7 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (query.trim() && !isLoading) {
-      onConvert(query, provider);
+      onConvert(query, provider, database);
     }
   };
 
@@ -96,8 +103,56 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
 
             {/* Toolbar inside input */}
             <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/80 rounded-b-xl border-t border-zinc-800/60 mt-auto">
-              {/* AI Provider Dropdown */}
-              <div className="relative" ref={menuRef}>
+              <div className="flex items-center gap-2">
+                {/* Database Dropdown */}
+                <div className="relative" ref={dbMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setDatabaseMenuOpen(!databaseMenuOpen)}
+                    disabled={isLoading}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-950/50 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 transition-all text-sm font-medium text-zinc-300 disabled:opacity-50"
+                  >
+                    <Database className="w-4 h-4 text-amber-400" />
+                    {database === 'sakila' ? 'Sakila DB' : 'Airport DB'}
+                    <ChevronDown className={`w-3 h-3 text-zinc-500 transition-transform ${databaseMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  <AnimatePresence>
+                    {databaseMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute bottom-full left-0 mb-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl overflow-hidden p-1 z-50 origin-bottom-left"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { setDatabase('sakila'); setDatabaseMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800/60 transition-colors text-left group"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium text-zinc-200">Sakila DB</span>
+                            <span className="text-[10px] text-zinc-500">Movie Rentals</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setDatabase('airportdb'); setDatabaseMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800/60 transition-colors text-left group mt-1"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium text-zinc-200">Airport DB</span>
+                            <span className="text-[10px] text-zinc-500">Flights & Passengers</span>
+                          </div>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* AI Provider Dropdown */}
+                <div className="relative" ref={menuRef}>
                 <button
                   type="button"
                   onClick={() => setProviderMenuOpen(!providerMenuOpen)}
@@ -171,6 +226,8 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
                     </motion.div>
                   )}
                 </AnimatePresence>
+              </div>
+
               </div>
 
               {/* Action Buttons */}
@@ -335,6 +392,31 @@ export function ConverterPanel({ onConvert, currentQuery, currentSql, isLoading,
                   <span className="font-semibold text-amber-500">Read-Only View:</span> Review this generated query to ensure accuracy before running it.
                 </p>
               </div>
+              {/* Server Logs Panel */}
+              {serverLogs && serverLogs.length > 0 && (
+                <div className="mt-6 flex flex-col rounded-2xl border border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md overflow-hidden shadow-2xl h-fit ring-1 ring-white/5">
+                  <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/60 bg-zinc-900/40">
+                    <div className="flex items-center gap-3">
+                      <div className="p-1.5 bg-zinc-800 rounded-md">
+                        <Terminal className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <h3 className="text-sm font-semibold text-zinc-100">Server Execution Logs</h3>
+                    </div>
+                  </div>
+                  <div className="p-4 overflow-auto bg-[#0d0d0f] relative max-h-[300px]">
+                    <pre className="font-mono text-xs leading-relaxed text-zinc-400 space-y-1">
+                      {serverLogs.map((log, i) => (
+                        <div key={i}>
+                          <span className="text-zinc-600 mr-2">[{new Date().toLocaleTimeString()}]</span>
+                          <span className={log.includes('✅') ? 'text-emerald-400' : log.includes('❌') || log.includes('⚠️') ? 'text-rose-400' : 'text-zinc-300'}>
+                            {log}
+                          </span>
+                        </div>
+                      ))}
+                    </pre>
+                  </div>
+                </div>
+              )}
               </div>
             )}
           </motion.div>

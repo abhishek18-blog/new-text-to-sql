@@ -11,8 +11,10 @@ export interface HistoryItem {
   sql?: string;
   timestamp: number;
   provider: 'local' | 'online';
+  database: string;
   aiResponse?: string;
   results?: any[] | null;
+  logs?: string[];
 }
 
 // We removed the mock DB functions since we now call the real API
@@ -27,6 +29,7 @@ export function MainApp() {
   const [queryUsedForOutput, setQueryUsedForOutput] = useState('');
   const [queryResult, setQueryResult] = useState<any[] | null>(null);
   const [aiResponse, setAiResponse] = useState<string>('');
+  const [serverLogs, setServerLogs] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>('User');
 
   useEffect(() => {
@@ -53,7 +56,7 @@ export function MainApp() {
     }
   }, [history]);
 
-  const handleConvert = async (query: string, provider: 'local' | 'online') => {
+  const handleConvert = async (query: string, provider: 'local' | 'online', database: string) => {
     setIsLoading(true);
     setCurrentQuery(query);
 
@@ -74,7 +77,8 @@ export function MainApp() {
         body: JSON.stringify({
           question: query,
           role: userRole.toLowerCase(),
-          provider
+          provider,
+          database
         }),
         signal: controller.signal
       });
@@ -93,6 +97,7 @@ export function MainApp() {
       setCurrentSql(data.sql_query || '');
       setQueryResult(parsedResults);
       setAiResponse(data.answer);
+      setServerLogs(data.logs || []);
 
       // Add to history
       const newItem: HistoryItem = {
@@ -101,8 +106,10 @@ export function MainApp() {
         sql: data.sql_query,
         timestamp: Date.now(),
         provider,
+        database,
         aiResponse: data.answer,
-        results: parsedResults
+        results: parsedResults,
+        logs: data.logs || []
       };
 
       setHistory(prev => [newItem, ...prev]);
@@ -145,6 +152,7 @@ export function MainApp() {
     setQueryUsedForOutput(item.query);
     setQueryResult(item.results || null);
     setAiResponse(item.aiResponse || '');
+    setServerLogs(item.logs || []);
   };
 
   const handleClearHistory = () => {
@@ -156,6 +164,7 @@ export function MainApp() {
       setQueryUsedForOutput('');
       setQueryResult(null);
       setAiResponse('');
+      setServerLogs([]);
       setSelectedId(null);
     }
   };
@@ -197,6 +206,7 @@ export function MainApp() {
           queryResult={queryResult}
           aiResponse={aiResponse}
           userRole={userRole}
+          serverLogs={serverLogs}
         />
       </div>
     </div>

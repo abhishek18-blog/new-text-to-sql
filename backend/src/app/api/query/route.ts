@@ -32,7 +32,7 @@ export async function OPTIONS() {
 //   2. We execute it ourselves
 //   3. Ask the LLM to summarize the result in plain English (1 LLM call)
 // Total: 2 LLM calls instead of 5+
-async function handleLocalAI(question: string, role: string, schemaStr: string) {
+async function handleLocalAI(question: string, role: string, schemaStr: string, database?: string, addLog?: (msg: string) => void) {
   const llm = new ChatOllama({
     baseUrl: "http://localhost:11434",
     model: "llama3.2:latest",
@@ -60,6 +60,8 @@ STRICT RULES — FOLLOW EXACTLY:
 11. ${privacyRule}
 12. ALWAYS use IN instead of = when comparing against a subquery. Example: WHERE id IN (SELECT ...) NOT WHERE id = (SELECT ...)
 13. NEVER use LIMIT inside an IN() subquery — MySQL does not support it. Instead, use a JOIN with a derived table. Example: JOIN (SELECT film_id FROM rental GROUP BY film_id ORDER BY COUNT(*) DESC LIMIT 1) AS top ON film.film_id = top.film_id
+14. CROSS-DB PROTECTION: You are connected to the '${database || 'sakila'}' database. If the user's question asks about a topic that clearly belongs to a different database (e.g. asking about flights/passengers in the movie database, or asking about movies/rentals in the airport database), output exactly: CROSS_DB_ERROR
+15. NEVER hallucinate columns. Always double-check the schema before using a column name. Do NOT assume common columns like 'store_id' or 'status' exist on every table.
 
 Schema:
 ${schemaStr}
@@ -76,6 +78,9 @@ SQL:`;
   }
   if (rawSql === "NOT_A_QUERY") {
     return { sql_query: null, results: null, answer: "Hello! I'm your SQL assistant. Ask me anything about your database." };
+  }
+  if (rawSql === "CROSS_DB_ERROR") {
+    return { sql_query: null, results: null, answer: `This question does not match the currently selected database (${database === 'airportdb' ? 'Airport DB' : 'Sakila DB'}). Please switch databases or ask a relevant question.` };
   }
   // Meta/descriptive question — model answers inline with DESCRIBE: prefix (1 LLM call, no second call needed)
   if (rawSql.startsWith("DESCRIBE:")) {
@@ -94,7 +99,7 @@ SQL:`;
   let results: any[] | null = null;
   let executionError: string | null = null;
   try {
-    const rows = await execute(cleanSql) as any[];
+    const rows = await execute(cleanSql, database, addLog) as any[];
     results = JSON.parse(JSON.stringify(rows, (_, v) => typeof v === "bigint" ? v.toString() : v));
   } catch (e: any) {
     executionError = e.message;
@@ -102,7 +107,9 @@ SQL:`;
 
   // Step 3b: Retry once with the error so the model can self-correct
   if (executionError) {
-    console.warn("⚠️ Local AI SQL failed, retrying with error context...");
+    const retryMsg = "⚠️ Local AI SQL failed, retrying with error context...";
+    console.warn(retryMsg);
+    if (addLog) addLog(retryMsg);
     const retryPrompt = `${sqlPrompt}
 
 Your previous attempt was:
@@ -118,7 +125,7 @@ Fix the SQL and output ONLY the corrected raw SQL query:`;
       .trim();
 
     try {
-      const rows = await execute(retrySql) as any[];
+      const rows = await execute(retrySql, database, addLog) as any[];
       results = JSON.parse(JSON.stringify(rows, (_, v) => typeof v === "bigint" ? v.toString() : v));
       executionError = null;
       return {
@@ -152,7 +159,7 @@ Give a short, direct, plain English answer. Do NOT mention SQL or raw data. Just
 }
 
 // ─── Online AI path (unchanged – uses full ReAct agent) ────────────────────
-async function handleOnlineAI(question: string, role: string, schemaStr: string) {
+async function handleOnlineAI(question: string, role: string, schemaStr: string, database?: string, addLog?: (msg: string) => void) {
   const llm = new ChatGroq({
     apiKey: process.env.GROQ_API_KEY,
     model: "llama-3.1-8b-instant",
@@ -163,7 +170,7 @@ async function handleOnlineAI(question: string, role: string, schemaStr: string)
     async (input) => {
       if (input?.sql) {
         try {
-          const result = await execute(input.sql);
+          const result = await execute(input.sql, database, addLog);
           return JSON.stringify(result, (key, value) =>
             typeof value === "bigint" ? value.toString() : value
           );
@@ -198,6 +205,7 @@ CRITICAL INSTRUCTIONS:
 7. If the user's input is a greeting or unrelated to the schema, respond conversationally WITHOUT using the tool.
 8. If the user asks a descriptive/meta question about the database (e.g. 'what is this database?', 'describe the database', 'what tables are there?'), answer directly from the Schema below WITHOUT using the get_from_db tool. Give a short, friendly plain English description — do NOT query INFORMATION_SCHEMA.
 9. If the column contains ISO 8601 strings (e.g., '2015-06-01T...'), you MUST wrap the column name in STR_TO_DATE(column_name, '%Y-%m-%dT%H:%i:%s.%fZ') before applying date functions like MONTH(), YEAR(), or DAY().
+10. CROSS-DB PROTECTION: You are connected to the '${database || 'sakila'}' database. If the user's question asks about a topic that clearly belongs to a different database (e.g., asking about flights/passengers in the movie database, or asking about movies/rentals in the airport database), do NOT use the get_from_db tool. Answer exactly: "This question does not match the currently selected database (${database === 'airportdb' ? 'Airport DB' : 'Sakila DB'}). Please switch databases or ask a relevant question."
 
 PRIVACY & ACCESS CONTROL:
 The current active user role is: ${role.toUpperCase()}
@@ -208,7 +216,7 @@ Schema:
 ${schemaStr}`),
       new HumanMessage(question),
     ],
-  }, { recursionLimit: 40 });
+  }, { recursionLimit: 5 }); //changed recursion limit to 5
 
   const messages = response.messages;
   let sql_query = null;
@@ -241,18 +249,24 @@ ${schemaStr}`),
 // ─── Main POST handler ──────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
-    const { question, role, provider } = await req.json();
+    const { question, role, provider, database } = await req.json();
 
-    seed();
+    const serverLogs: string[] = [];
+    const addLog = (msg: string) => serverLogs.push(msg);
 
-    const schemaStr = await getSchema();
+    await seed(database, addLog);
+
+    const schemaStr = await getSchema(database, addLog);
 
     let result;
     if (provider === "local") {
-      result = await handleLocalAI(question, role, schemaStr);
+      result = await handleLocalAI(question, role, schemaStr, database, addLog);
     } else {
-      result = await handleOnlineAI(question, role, schemaStr);
+      result = await handleOnlineAI(question, role, schemaStr, database, addLog);
     }
+
+    // Include logs in the result payload
+    result.logs = serverLogs;
 
     return NextResponse.json(result, {
       headers: {

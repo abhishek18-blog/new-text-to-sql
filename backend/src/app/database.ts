@@ -2,23 +2,35 @@
 
 import mysql from 'mysql2/promise';
 
-export async function seed() {
+function getDbUrl(dbName?: string) {
+  if (dbName === "airportdb") return process.env.DATABASE_URL_AIRPORT || process.env.DATABASE_URL!;
+  if (dbName === "sakila") return process.env.DATABASE_URL_SAKILA || process.env.DATABASE_URL!;
+  return process.env.DATABASE_URL_SAKILA || process.env.DATABASE_URL!; // default
+}
+
+export async function seed(dbName?: string, addLog?: (msg: string) => void) {
   try {
-    const connection = await mysql.createConnection(process.env.DATABASE_URL!);
+    const connection = await mysql.createConnection(getDbUrl(dbName));
     await connection.ping();
-    console.log("✅ SUCCESS: Database is actively connected and reachable!");
+    const msg = `✅ SUCCESS: Database (${dbName || 'sakila'}) is actively connected and reachable!`;
+    console.log(msg);
+    if (addLog) addLog(msg);
     await connection.end();
   } catch (error: any) {
-    console.error("❌ ERROR: Could not connect to the database. Reason:", error.message);
+    const msg = `❌ ERROR: Could not connect to the database (${dbName || 'sakila'}). Reason: ${error.message}`;
+    console.error(msg);
+    if (addLog) addLog(msg);
   }
 }
 
-export async function execute(sql: string) {
+export async function execute(sql: string, dbName?: string, addLog?: (msg: string) => void) {
   try {
-    console.log("Executing SQL on local MySQL:", sql);
+    const msg1 = `Executing SQL on local MySQL: ${sql}`;
+    console.log(msg1);
+    if (addLog) addLog(msg1);
     
     // Create a connection to the local database
-    const connection = await mysql.createConnection(process.env.DATABASE_URL!);
+    const connection = await mysql.createConnection(getDbUrl(dbName));
     
     // Execute the query
     const [rows] = await connection.query(sql);
@@ -26,19 +38,27 @@ export async function execute(sql: string) {
     // Close the connection
     await connection.end();
     
-    console.log("✅ Query successful!");
+    const msg2 = `✅ Query successful!`;
+    console.log(msg2);
+    if (addLog) addLog(msg2);
     return rows;
   } catch (error: any) {
+    const msg3 = `❌ SQL Execution Error: ${error.message}`;
+    console.error(msg3);
+    if (addLog) addLog(msg3);
     throw new Error(`SQL Syntax or Execution Error: ${error.message}`);
   }
 }
 
-export async function getSchema() {
+export async function getSchema(dbName?: string, addLog?: (msg: string) => void) {
   try {
-    console.log("Fetching database schema...");
-    const connection = await mysql.createConnection(process.env.DATABASE_URL!);
+    const msg = `Fetching database schema for ${dbName || 'sakila'}...`;
+    console.log(msg);
+    if (addLog) addLog(msg);
+    const dbUrl = getDbUrl(dbName);
+    const connection = await mysql.createConnection(dbUrl);
     const [tables]: any = await connection.query("SHOW TABLES");
-    const dbName = process.env.DATABASE_URL!.split("/").pop()?.split("?")[0];
+    const actualDbName = dbUrl.split("/").pop()?.split("?")[0];
 
     let schemaStr = "";
 
@@ -58,7 +78,7 @@ export async function getSchema() {
         SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
-      `, [dbName, tableName]);
+      `, [actualDbName, tableName]);
 
       let fkStr = "";
       if (fkRows.length > 0) {
@@ -73,7 +93,9 @@ export async function getSchema() {
     await connection.end();
     return schemaStr;
   } catch (error: any) {
-    console.error("❌ ERROR: Could not fetch database schema:", error.message);
+    const msg = `❌ ERROR: Could not fetch database schema: ${error.message}`;
+    console.error(msg);
+    if (addLog) addLog(msg);
     return "Error fetching schema.";
   }
 }
